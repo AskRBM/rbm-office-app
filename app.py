@@ -511,7 +511,7 @@ def task_delegation():
 
     emp_list = emp["employee_name"].dropna().tolist() if not emp.empty else []
 
-    with st.form("task_form"):
+    with st.form("task_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
 
         task_date = c1.date_input("Task Date", value=date.today())
@@ -520,36 +520,48 @@ def task_delegation():
         assign_mode = c1.radio(
             "Assign Type",
             ["Select Employee", "Manual Entry"],
-            horizontal=True
+            horizontal=True,
+            key="task_assign_mode_radio"
         )
 
-        if assign_mode == "Select Employee":
-            if emp_list:
-                assigned_to = c2.selectbox("Assigned To", emp_list)
-            else:
-                c2.warning("No employee found. Please use Manual Entry.")
-                assigned_to = ""
-        else:
-            assigned_to = c2.text_input(
-                "Assigned To - Manual Name",
-                placeholder="Type person name here"
-            )
-
         priority = c1.selectbox("Priority", ["Low", "Medium", "High", "Urgent"])
-        due_date = c2.date_input("Due Date")
         status = c1.selectbox("Status", ["Pending", "In Progress", "Completed"])
+
+        if assign_mode == "Manual Entry":
+            assigned_to = c2.text_input(
+                "Assigned To",
+                value="",
+                placeholder="Type manual name here",
+                key="task_manual_assigned_to"
+            )
+        else:
+            if emp_list:
+                assigned_to = c2.selectbox(
+                    "Assigned To",
+                    emp_list,
+                    key="task_employee_assigned_to"
+                )
+            else:
+                assigned_to = c2.text_input(
+                    "Assigned To",
+                    value="",
+                    placeholder="No employee found, type name here",
+                    key="task_no_employee_assigned_to"
+                )
+
+        due_date = c2.date_input("Due Date")
         remarks = c2.text_input("Remarks")
 
         if st.form_submit_button("Save Task", use_container_width=True):
             if task.strip() == "":
                 st.error("Task is required")
-            elif assigned_to.strip() == "":
+            elif str(assigned_to).strip() == "":
                 st.error("Assigned To is required")
             else:
                 insert_row("tasks", {
                     "task_date": str(task_date),
                     "task": task,
-                    "assigned_to": assigned_to,
+                    "assigned_to": str(assigned_to),
                     "priority": priority,
                     "due_date": str(due_date),
                     "status": status,
@@ -561,7 +573,6 @@ def task_delegation():
                 st.rerun()
 
     show_table_with_edit_delete("tasks", df, "Task Records")
-
 
 def export_reports():
     st.header("Excel / CSV Export Reports")
@@ -711,7 +722,7 @@ def main_app():
     elif choice == "User Management":
         user_management()
     elif choice == "App Settings":
-        app_settings()
+        app_settings()  
 
 
 if "logged_in" not in st.session_state:
