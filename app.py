@@ -1,32 +1,33 @@
 import streamlit as st
 import pandas as pd
-from pathlib import Path
 from datetime import datetime, date
 from io import BytesIO
+from supabase import create_client, Client
 
 st.set_page_config(page_title="RBM AI Office", page_icon="🏢", layout="wide")
 
-DATA_FOLDER = Path(r"C:\Users\Admin\OneDrive\Apps\RBM_DATA_App")
-DATA_FOLDER.mkdir(parents=True, exist_ok=True)
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
-FILES = {
-    "settings": DATA_FOLDER / "settings.csv",
-    "users": DATA_FOLDER / "users.csv",
-    "employees": DATA_FOLDER / "employees.csv",
-    "attendance": DATA_FOLDER / "attendance.csv",
-    "inout": DATA_FOLDER / "inout.csv",
-    "visitors": DATA_FOLDER / "visitors.csv",
-    "tasks": DATA_FOLDER / "tasks.csv",
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+TABLES = {
+    "settings": "settings",
+    "users": "users",
+    "employees": "employees",
+    "attendance": "attendance",
+    "inout": "inout_register",
+    "visitors": "visitors",
+    "tasks": "tasks",
 }
 
-COLUMNS = {
-    "settings": ["Setting", "Value"],
-    "users": ["Username", "Password", "Role", "Full Name"],
-    "employees": ["Employee ID", "Employee Name", "Mobile", "Email", "Department", "Designation", "Status"],
-    "attendance": ["Date", "Employee Name", "Status", "In Time", "Out Time", "Working Hours", "Remarks", "Created By"],
-    "inout": ["Date", "Person Name", "Purpose", "In Time", "Out Time", "Remarks", "Created By"],
-    "visitors": ["Date", "Visitor Name", "Mobile", "Company", "Meeting With", "Purpose", "In Time", "Out Time", "Remarks", "Created By"],
-    "tasks": ["Date", "Task", "Assigned To", "Priority", "Due Date", "Status", "Remarks", "Created By"],
+DISPLAY_COLUMNS = {
+    "users": ["id", "username", "password", "role", "full_name"],
+    "employees": ["id", "employee_id", "employee_name", "mobile", "email", "department", "designation", "status"],
+    "attendance": ["id", "attendance_date", "employee_name", "status", "in_time", "out_time", "working_hours", "remarks", "created_by"],
+    "inout": ["id", "entry_date", "person_name", "purpose", "in_time", "out_time", "remarks", "created_by"],
+    "visitors": ["id", "visit_date", "visitor_name", "mobile", "company", "meeting_with", "purpose", "in_time", "out_time", "remarks", "created_by"],
+    "tasks": ["id", "task_date", "task", "assigned_to", "priority", "due_date", "status", "remarks", "created_by"],
 }
 
 st.markdown("""
@@ -56,61 +57,61 @@ header {visibility:hidden;}
 """, unsafe_allow_html=True)
 
 
-def load_csv(key):
-    file_path = FILES[key]
-    columns = COLUMNS[key]
-    if file_path.exists():
-        df = pd.read_csv(file_path)
-        for col in columns:
+def load_table(key):
+    response = supabase.table(TABLES[key]).select("*").execute()
+    data = response.data or []
+    df = pd.DataFrame(data)
+    if key in DISPLAY_COLUMNS:
+        for col in DISPLAY_COLUMNS[key]:
             if col not in df.columns:
                 df[col] = ""
-        return df[columns]
-    df = pd.DataFrame(columns=columns)
-    df.to_csv(file_path, index=False)
+        df = df[DISPLAY_COLUMNS[key]]
     return df
 
 
-def save_csv(key, df):
-    df.to_csv(FILES[key], index=False)
+def insert_row(key, row):
+    supabase.table(TABLES[key]).insert(row).execute()
+
+
+def update_row(key, row_id, row):
+    supabase.table(TABLES[key]).update(row).eq("id", row_id).execute()
+
+
+def delete_row(key, row_id):
+    supabase.table(TABLES[key]).delete().eq("id", row_id).execute()
 
 
 def init_users():
-    df = load_csv("users")
+    df = load_table("users")
     if df.empty:
-        df = pd.DataFrame([
-            {"Username": "admin", "Password": "rbm123", "Role": "Admin", "Full Name": "RBM Admin"},
-            {"Username": "user", "Password": "user123", "Role": "User", "Full Name": "RBM User"},
-        ])
-        save_csv("users", df)
-    return df
-
-
-def init_settings():
-    df = load_csv("settings")
-    if df.empty:
-        df = pd.DataFrame([
-            {"Setting": "APP_NAME", "Value": "RBM AI Office Management App"},
-            {"Setting": "CLIENT_NAME", "Value": "RBM Client"},
-        ])
-        save_csv("settings", df)
+        insert_row("users", {
+            "username": "admin",
+            "password": "rbm123",
+            "role": "Admin",
+            "full_name": "RBM Admin"
+        })
+        df = load_table("users")
     return df
 
 
 def get_setting(name, default):
-    df = init_settings()
-    row = df[df["Setting"] == name]
+    df = load_table("settings")
+    if df.empty:
+        return default
+    row = df[df["setting"].astype(str) == name]
     if row.empty:
         return default
-    return str(row.iloc[0]["Value"])
+    return str(row.iloc[0]["value"])
 
 
 def update_setting(name, value):
-    df = init_settings()
-    if name in df["Setting"].astype(str).tolist():
-        df.loc[df["Setting"] == name, "Value"] = value
+    df = load_table("settings")
+    row = df[df["setting"].astype(str) == name]
+    if row.empty:
+        insert_row("settings", {"setting": name, "value": value})
     else:
-        df = pd.concat([df, pd.DataFrame([{"Setting": name, "Value": value}])], ignore_index=True)
-    save_csv("settings", df)
+        row_id = int(row.iloc[0]["id"])
+        update_row("settings", row_id, {"value": value})
 
 
 APP_NAME = get_setting("APP_NAME", "RBM AI Office Management App")
@@ -141,7 +142,10 @@ def filter_dataframe(df, keyword):
     if keyword.strip() == "":
         return df
     keyword = keyword.lower()
-    mask = df.astype(str).apply(lambda row: row.str.lower().str.contains(keyword, na=False).any(), axis=1)
+    mask = df.astype(str).apply(
+        lambda row: row.str.lower().str.contains(keyword, na=False).any(),
+        axis=1
+    )
     return df[mask]
 
 
@@ -165,7 +169,7 @@ def next_employee_id(df):
     if df.empty:
         return "EMP001"
     nums = []
-    for x in df["Employee ID"].dropna().astype(str):
+    for x in df["employee_id"].dropna().astype(str):
         if x.upper().startswith("EMP"):
             n = x.upper().replace("EMP", "")
             if n.isdigit():
@@ -182,6 +186,7 @@ def show_table_with_edit_delete(key, df, title):
     st.dataframe(filtered, use_container_width=True)
 
     c1, c2 = st.columns(2)
+
     with c1:
         st.download_button(
             "Download Excel",
@@ -191,6 +196,7 @@ def show_table_with_edit_delete(key, df, title):
             use_container_width=True,
             key=f"xlsx_{key}"
         )
+
     with c2:
         st.download_button(
             "Download CSV",
@@ -205,38 +211,35 @@ def show_table_with_edit_delete(key, df, title):
         st.divider()
         st.subheader("Admin Edit / Delete")
 
-        row_no = st.number_input(
-            "Enter row number to edit/delete",
-            min_value=0,
-            max_value=max(len(df) - 1, 0),
-            value=0,
-            step=1,
-            key=f"row_{key}"
+        selected_id = st.selectbox(
+            "Select record ID to edit/delete",
+            df["id"].tolist(),
+            key=f"select_id_{key}"
         )
 
-        st.caption("Row number is the left-side index shown in the table.")
+        selected_row = df[df["id"] == selected_id].iloc[0]
 
-        with st.expander("Edit Selected Row"):
+        with st.expander("Edit Selected Record"):
             edited_values = {}
             for col in df.columns:
-                edited_values[col] = st.text_input(
-                    col,
-                    value=str(df.loc[row_no, col]) if row_no < len(df) else "",
-                    key=f"edit_{key}_{col}"
-                )
+                if col == "id":
+                    st.text_input(col, value=str(selected_row[col]), disabled=True, key=f"edit_{key}_{col}")
+                else:
+                    edited_values[col] = st.text_input(
+                        col,
+                        value=str(selected_row[col]),
+                        key=f"edit_{key}_{col}"
+                    )
 
-            if st.button("Update Selected Row", use_container_width=True, key=f"update_{key}"):
-                for col in df.columns:
-                    df.loc[row_no, col] = edited_values[col]
-                save_csv(key, df)
+            if st.button("Update Selected Record", use_container_width=True, key=f"update_{key}"):
+                update_row(key, int(selected_id), edited_values)
                 st.success("Record updated successfully")
                 st.rerun()
 
-        with st.expander("Delete Selected Row"):
-            st.warning("This will permanently delete selected row from OneDrive CSV.")
-            if st.button("Delete Selected Row", use_container_width=True, key=f"delete_{key}"):
-                df = df.drop(index=row_no).reset_index(drop=True)
-                save_csv(key, df)
+        with st.expander("Delete Selected Record"):
+            st.warning("This will permanently delete selected record from Supabase.")
+            if st.button("Delete Selected Record", use_container_width=True, key=f"delete_{key}"):
+                delete_row(key, int(selected_id))
                 st.success("Record deleted successfully")
                 st.rerun()
 
@@ -244,23 +247,26 @@ def show_table_with_edit_delete(key, df, title):
 def login_page():
     rbm_header()
     st.subheader("Secure Login")
+
     users = init_users()
 
     c1, c2, c3 = st.columns([1, 2, 1])
+
     with c2:
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")
 
         if st.button("Login", use_container_width=True):
             match = users[
-                (users["Username"].astype(str) == username) &
-                (users["Password"].astype(str) == password)
+                (users["username"].astype(str) == username) &
+                (users["password"].astype(str) == password)
             ]
+
             if not match.empty:
                 st.session_state["logged_in"] = True
                 st.session_state["username"] = username
-                st.session_state["role"] = match.iloc[0]["Role"]
-                st.session_state["full_name"] = match.iloc[0]["Full Name"]
+                st.session_state["role"] = match.iloc[0]["role"]
+                st.session_state["full_name"] = match.iloc[0]["full_name"]
                 st.rerun()
             else:
                 st.error("Wrong username or password")
@@ -271,16 +277,17 @@ def login_page():
 def dashboard():
     st.header("Admin Dashboard")
 
-    emp = load_csv("employees")
-    att = load_csv("attendance")
-    visitors = load_csv("visitors")
-    tasks = load_csv("tasks")
+    emp = load_table("employees")
+    att = load_table("attendance")
+    visitors = load_table("visitors")
+    tasks = load_table("tasks")
 
     pending_tasks = 0
     if not tasks.empty:
-        pending_tasks = len(tasks[tasks["Status"].astype(str) != "Completed"])
+        pending_tasks = len(tasks[tasks["status"].astype(str) != "Completed"])
 
     c1, c2, c3, c4 = st.columns(4)
+
     with c1:
         show_metric_card("Employees", len(emp))
     with c2:
@@ -294,20 +301,23 @@ def dashboard():
     st.subheader("Today Summary")
 
     today_text = str(date.today())
-    today_att = att[att["Date"].astype(str) == today_text] if not att.empty else att
-    today_visitors = visitors[visitors["Date"].astype(str) == today_text] if not visitors.empty else visitors
+
+    today_att = att[att["attendance_date"].astype(str) == today_text] if not att.empty else att
+    today_visitors = visitors[visitors["visit_date"].astype(str) == today_text] if not visitors.empty else visitors
 
     c5, c6 = st.columns(2)
+
     with c5:
         st.write("Today Attendance")
         st.dataframe(today_att, use_container_width=True)
+
     with c6:
         st.write("Today Visitors")
         st.dataframe(today_visitors, use_container_width=True)
 
     st.subheader("Pending Tasks")
     if not tasks.empty:
-        st.dataframe(tasks[tasks["Status"].astype(str) != "Completed"], use_container_width=True)
+        st.dataframe(tasks[tasks["status"].astype(str) != "Completed"], use_container_width=True)
     else:
         st.info("No task data found.")
 
@@ -315,13 +325,14 @@ def dashboard():
 def employee_master():
     st.header("Employee Master")
 
-    df = load_csv("employees")
+    df = load_table("employees")
     auto_id = next_employee_id(df)
 
     with st.form("employee_form"):
         c1, c2 = st.columns(2)
-        emp_id = c1.text_input("Employee ID", value=auto_id)
-        emp_name = c2.text_input("Employee Name")
+
+        employee_id = c1.text_input("Employee ID", value=auto_id)
+        employee_name = c2.text_input("Employee Name")
         mobile = c1.text_input("Mobile")
         email = c2.text_input("Email")
         department = c1.text_input("Department")
@@ -329,20 +340,18 @@ def employee_master():
         status = c1.selectbox("Status", ["Active", "Inactive"])
 
         if st.form_submit_button("Save Employee", use_container_width=True):
-            if emp_name.strip() == "":
+            if employee_name.strip() == "":
                 st.error("Employee Name is required")
             else:
-                new_row = {
-                    "Employee ID": emp_id,
-                    "Employee Name": emp_name,
-                    "Mobile": mobile,
-                    "Email": email,
-                    "Department": department,
-                    "Designation": designation,
-                    "Status": status,
-                }
-                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-                save_csv("employees", df)
+                insert_row("employees", {
+                    "employee_id": employee_id,
+                    "employee_name": employee_name,
+                    "mobile": mobile,
+                    "email": email,
+                    "department": department,
+                    "designation": designation,
+                    "status": status,
+                })
                 st.success("Employee saved successfully")
                 st.rerun()
 
@@ -352,38 +361,37 @@ def employee_master():
 def attendance():
     st.header("Attendance Management")
 
-    df = load_csv("attendance")
-    emp = load_csv("employees")
+    df = load_table("attendance")
+    emp = load_table("employees")
 
-    emp_list = emp["Employee Name"].dropna().tolist()
+    emp_list = emp["employee_name"].dropna().tolist() if not emp.empty else []
     if not emp_list:
         emp_list = ["No Employee Found"]
 
     with st.form("attendance_form"):
         c1, c2 = st.columns(2)
-        entry_date = c1.date_input("Date", value=date.today())
-        employee = c2.selectbox("Employee Name", emp_list)
+
+        attendance_date = c1.date_input("Date", value=date.today())
+        employee_name = c2.selectbox("Employee Name", emp_list)
         status = c1.selectbox("Status", ["Present", "Absent", "Half Day", "Leave"])
         in_time = c2.time_input("In Time")
         out_time = c1.time_input("Out Time")
         remarks = c2.text_input("Remarks")
 
         if st.form_submit_button("Save Attendance", use_container_width=True):
-            if employee == "No Employee Found":
+            if employee_name == "No Employee Found":
                 st.error("Please create employee first")
             else:
-                new_row = {
-                    "Date": entry_date,
-                    "Employee Name": employee,
-                    "Status": status,
-                    "In Time": in_time,
-                    "Out Time": out_time,
-                    "Working Hours": calculate_hours(in_time, out_time),
-                    "Remarks": remarks,
-                    "Created By": st.session_state["username"],
-                }
-                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-                save_csv("attendance", df)
+                insert_row("attendance", {
+                    "attendance_date": str(attendance_date),
+                    "employee_name": employee_name,
+                    "status": status,
+                    "in_time": str(in_time),
+                    "out_time": str(out_time),
+                    "working_hours": str(calculate_hours(in_time, out_time)),
+                    "remarks": remarks,
+                    "created_by": st.session_state["username"],
+                })
                 st.success("Attendance saved successfully")
                 st.rerun()
 
@@ -393,32 +401,31 @@ def attendance():
 def inout_register():
     st.header("IN / OUT Register")
 
-    df = load_csv("inout")
+    df = load_table("inout")
 
     with st.form("inout_form"):
         c1, c2 = st.columns(2)
+
         entry_date = c1.date_input("Date", value=date.today())
-        person = c2.text_input("Person Name")
+        person_name = c2.text_input("Person Name")
         purpose = c1.text_input("Purpose")
         in_time = c2.time_input("In Time")
         out_time = c1.time_input("Out Time")
         remarks = c2.text_input("Remarks")
 
         if st.form_submit_button("Save IN / OUT Entry", use_container_width=True):
-            if person.strip() == "":
+            if person_name.strip() == "":
                 st.error("Person Name is required")
             else:
-                new_row = {
-                    "Date": entry_date,
-                    "Person Name": person,
-                    "Purpose": purpose,
-                    "In Time": in_time,
-                    "Out Time": out_time,
-                    "Remarks": remarks,
-                    "Created By": st.session_state["username"],
-                }
-                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-                save_csv("inout", df)
+                insert_row("inout", {
+                    "entry_date": str(entry_date),
+                    "person_name": person_name,
+                    "purpose": purpose,
+                    "in_time": str(in_time),
+                    "out_time": str(out_time),
+                    "remarks": remarks,
+                    "created_by": st.session_state["username"],
+                })
                 st.success("IN / OUT entry saved")
                 st.rerun()
 
@@ -428,12 +435,13 @@ def inout_register():
 def visitor_register():
     st.header("Visitor Register")
 
-    df = load_csv("visitors")
+    df = load_table("visitors")
 
     with st.form("visitor_form"):
         c1, c2 = st.columns(2)
-        entry_date = c1.date_input("Date", value=date.today())
-        visitor = c2.text_input("Visitor Name")
+
+        visit_date = c1.date_input("Date", value=date.today())
+        visitor_name = c2.text_input("Visitor Name")
         mobile = c1.text_input("Mobile")
         company = c2.text_input("Company")
         meeting_with = c1.text_input("Meeting With")
@@ -443,23 +451,21 @@ def visitor_register():
         remarks = c1.text_input("Remarks")
 
         if st.form_submit_button("Save Visitor", use_container_width=True):
-            if visitor.strip() == "":
+            if visitor_name.strip() == "":
                 st.error("Visitor Name is required")
             else:
-                new_row = {
-                    "Date": entry_date,
-                    "Visitor Name": visitor,
-                    "Mobile": mobile,
-                    "Company": company,
-                    "Meeting With": meeting_with,
-                    "Purpose": purpose,
-                    "In Time": in_time,
-                    "Out Time": out_time,
-                    "Remarks": remarks,
-                    "Created By": st.session_state["username"],
-                }
-                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-                save_csv("visitors", df)
+                insert_row("visitors", {
+                    "visit_date": str(visit_date),
+                    "visitor_name": visitor_name,
+                    "mobile": mobile,
+                    "company": company,
+                    "meeting_with": meeting_with,
+                    "purpose": purpose,
+                    "in_time": str(in_time),
+                    "out_time": str(out_time),
+                    "remarks": remarks,
+                    "created_by": st.session_state["username"],
+                })
                 st.success("Visitor saved successfully")
                 st.rerun()
 
@@ -469,14 +475,16 @@ def visitor_register():
 def task_delegation():
     st.header("Task Delegation")
 
-    df = load_csv("tasks")
-    emp = load_csv("employees")
-    emp_list = emp["Employee Name"].dropna().tolist()
+    df = load_table("tasks")
+    emp = load_table("employees")
+
+    emp_list = emp["employee_name"].dropna().tolist() if not emp.empty else []
     if not emp_list:
         emp_list = ["Manual Entry"]
 
     with st.form("task_form"):
         c1, c2 = st.columns(2)
+
         task_date = c1.date_input("Task Date", value=date.today())
         task = c2.text_area("Task")
         assign_mode = c1.selectbox("Assign Type", ["Select Employee", "Manual Entry"])
@@ -495,18 +503,16 @@ def task_delegation():
             if task.strip() == "":
                 st.error("Task is required")
             else:
-                new_row = {
-                    "Date": task_date,
-                    "Task": task,
-                    "Assigned To": assigned_to,
-                    "Priority": priority,
-                    "Due Date": due_date,
-                    "Status": status,
-                    "Remarks": remarks,
-                    "Created By": st.session_state["username"],
-                }
-                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-                save_csv("tasks", df)
+                insert_row("tasks", {
+                    "task_date": str(task_date),
+                    "task": task,
+                    "assigned_to": assigned_to,
+                    "priority": priority,
+                    "due_date": str(due_date),
+                    "status": status,
+                    "remarks": remarks,
+                    "created_by": st.session_state["username"],
+                })
                 st.success("Task saved successfully")
                 st.rerun()
 
@@ -523,13 +529,14 @@ def export_reports():
         st.warning("Only Admin can download user report.")
         return
 
-    df = load_csv(report)
+    df = load_table(report)
     search = st.text_input("Search Report")
     filtered = filter_dataframe(df, search)
 
     st.dataframe(filtered, use_container_width=True)
 
     c1, c2 = st.columns(2)
+
     with c1:
         st.download_button(
             "Download CSV",
@@ -538,6 +545,7 @@ def export_reports():
             mime="text/csv",
             use_container_width=True
         )
+
     with c2:
         st.download_button(
             "Download Excel",
@@ -559,6 +567,7 @@ def user_management():
 
     with st.form("user_form"):
         c1, c2 = st.columns(2)
+
         username = c1.text_input("New Username")
         password = c2.text_input("Password")
         role = c1.selectbox("Role", ["Admin", "User"])
@@ -567,17 +576,15 @@ def user_management():
         if st.form_submit_button("Create User", use_container_width=True):
             if username.strip() == "" or password.strip() == "":
                 st.error("Username and password are required")
-            elif username in df["Username"].astype(str).tolist():
+            elif username in df["username"].astype(str).tolist():
                 st.error("Username already exists")
             else:
-                new_row = {
-                    "Username": username,
-                    "Password": password,
-                    "Role": role,
-                    "Full Name": full_name,
-                }
-                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-                save_csv("users", df)
+                insert_row("users", {
+                    "username": username,
+                    "password": password,
+                    "role": role,
+                    "full_name": full_name,
+                })
                 st.success("User created successfully")
                 st.rerun()
 
@@ -601,10 +608,10 @@ def app_settings():
         if st.form_submit_button("Save Settings", use_container_width=True):
             update_setting("APP_NAME", app_name)
             update_setting("CLIENT_NAME", client_name)
-            st.success("Settings saved. Please refresh app.")
+            st.success("Settings saved successfully.")
             st.rerun()
 
-    st.info("For different clients, copy the project and change Client Name + DATA_FOLDER path.")
+    st.info("Now data is saved in Supabase Cloud Database, not OneDrive CSV.")
 
 
 def main_app():
