@@ -61,11 +61,13 @@ def load_table(key):
     response = supabase.table(TABLES[key]).select("*").execute()
     data = response.data or []
     df = pd.DataFrame(data)
+
     if key in DISPLAY_COLUMNS:
         for col in DISPLAY_COLUMNS[key]:
             if col not in df.columns:
                 df[col] = ""
         df = df[DISPLAY_COLUMNS[key]]
+
     return df
 
 
@@ -83,6 +85,7 @@ def delete_row(key, row_id):
 
 def init_users():
     df = load_table("users")
+
     if df.empty:
         insert_row("users", {
             "username": "admin",
@@ -91,22 +94,28 @@ def init_users():
             "full_name": "RBM Admin"
         })
         df = load_table("users")
+
     return df
 
 
 def get_setting(name, default):
     df = load_table("settings")
+
     if df.empty:
         return default
+
     row = df[df["setting"].astype(str) == name]
+
     if row.empty:
         return default
+
     return str(row.iloc[0]["value"])
 
 
 def update_setting(name, value):
     df = load_table("settings")
     row = df[df["setting"].astype(str) == name]
+
     if row.empty:
         insert_row("settings", {"setting": name, "value": value})
     else:
@@ -141,18 +150,23 @@ def show_metric_card(label, value):
 def filter_dataframe(df, keyword):
     if keyword.strip() == "":
         return df
+
     keyword = keyword.lower()
+
     mask = df.astype(str).apply(
         lambda row: row.str.lower().str.contains(keyword, na=False).any(),
         axis=1
     )
+
     return df[mask]
 
 
 def to_excel_bytes(df):
     output = BytesIO()
+
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Report")
+
     return output.getvalue()
 
 
@@ -168,12 +182,15 @@ def calculate_hours(in_time, out_time):
 def next_employee_id(df):
     if df.empty:
         return "EMP001"
+
     nums = []
+
     for x in df["employee_id"].dropna().astype(str):
         if x.upper().startswith("EMP"):
             n = x.upper().replace("EMP", "")
             if n.isdigit():
                 nums.append(int(n))
+
     return f"EMP{max(nums) + 1:03d}" if nums else "EMP001"
 
 
@@ -221,9 +238,15 @@ def show_table_with_edit_delete(key, df, title):
 
         with st.expander("Edit Selected Record"):
             edited_values = {}
+
             for col in df.columns:
                 if col == "id":
-                    st.text_input(col, value=str(selected_row[col]), disabled=True, key=f"edit_{key}_{col}")
+                    st.text_input(
+                        col,
+                        value=str(selected_row[col]),
+                        disabled=True,
+                        key=f"edit_{key}_{col}"
+                    )
                 else:
                     edited_values[col] = st.text_input(
                         col,
@@ -238,6 +261,7 @@ def show_table_with_edit_delete(key, df, title):
 
         with st.expander("Delete Selected Record"):
             st.warning("This will permanently delete selected record from Supabase.")
+
             if st.button("Delete Selected Record", use_container_width=True, key=f"delete_{key}"):
                 delete_row(key, int(selected_id))
                 st.success("Record deleted successfully")
@@ -283,6 +307,7 @@ def dashboard():
     tasks = load_table("tasks")
 
     pending_tasks = 0
+
     if not tasks.empty:
         pending_tasks = len(tasks[tasks["status"].astype(str) != "Completed"])
 
@@ -316,6 +341,7 @@ def dashboard():
         st.dataframe(today_visitors, use_container_width=True)
 
     st.subheader("Pending Tasks")
+
     if not tasks.empty:
         st.dataframe(tasks[tasks["status"].astype(str) != "Completed"], use_container_width=True)
     else:
@@ -352,6 +378,7 @@ def employee_master():
                     "designation": designation,
                     "status": status,
                 })
+
                 st.success("Employee saved successfully")
                 st.rerun()
 
@@ -365,6 +392,7 @@ def attendance():
     emp = load_table("employees")
 
     emp_list = emp["employee_name"].dropna().tolist() if not emp.empty else []
+
     if not emp_list:
         emp_list = ["No Employee Found"]
 
@@ -392,6 +420,7 @@ def attendance():
                     "remarks": remarks,
                     "created_by": st.session_state["username"],
                 })
+
                 st.success("Attendance saved successfully")
                 st.rerun()
 
@@ -426,6 +455,7 @@ def inout_register():
                     "remarks": remarks,
                     "created_by": st.session_state["username"],
                 })
+
                 st.success("IN / OUT entry saved")
                 st.rerun()
 
@@ -466,6 +496,7 @@ def visitor_register():
                     "remarks": remarks,
                     "created_by": st.session_state["username"],
                 })
+
                 st.success("Visitor saved successfully")
                 st.rerun()
 
@@ -479,20 +510,30 @@ def task_delegation():
     emp = load_table("employees")
 
     emp_list = emp["employee_name"].dropna().tolist() if not emp.empty else []
-    if not emp_list:
-        emp_list = ["Manual Entry"]
 
     with st.form("task_form"):
         c1, c2 = st.columns(2)
 
         task_date = c1.date_input("Task Date", value=date.today())
         task = c2.text_area("Task")
-        assign_mode = c1.selectbox("Assign Type", ["Select Employee", "Manual Entry"])
 
-        if assign_mode == "Select Employee" and emp_list != ["Manual Entry"]:
-            assigned_to = c2.selectbox("Assigned To", emp_list)
+        assign_mode = c1.radio(
+            "Assign Type",
+            ["Select Employee", "Manual Entry"],
+            horizontal=True
+        )
+
+        if assign_mode == "Select Employee":
+            if emp_list:
+                assigned_to = c2.selectbox("Assigned To", emp_list)
+            else:
+                c2.warning("No employee found. Please use Manual Entry.")
+                assigned_to = ""
         else:
-            assigned_to = c2.text_input("Assigned To")
+            assigned_to = c2.text_input(
+                "Assigned To - Manual Name",
+                placeholder="Type person name here"
+            )
 
         priority = c1.selectbox("Priority", ["Low", "Medium", "High", "Urgent"])
         due_date = c2.date_input("Due Date")
@@ -502,6 +543,8 @@ def task_delegation():
         if st.form_submit_button("Save Task", use_container_width=True):
             if task.strip() == "":
                 st.error("Task is required")
+            elif assigned_to.strip() == "":
+                st.error("Assigned To is required")
             else:
                 insert_row("tasks", {
                     "task_date": str(task_date),
@@ -513,6 +556,7 @@ def task_delegation():
                     "remarks": remarks,
                     "created_by": st.session_state["username"],
                 })
+
                 st.success("Task saved successfully")
                 st.rerun()
 
@@ -585,6 +629,7 @@ def user_management():
                     "role": role,
                     "full_name": full_name,
                 })
+
                 st.success("User created successfully")
                 st.rerun()
 
