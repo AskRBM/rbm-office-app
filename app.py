@@ -50,9 +50,6 @@ header {visibility:hidden;}
 .metric-number {font-size:34px;font-weight:800;color:#001f54;}
 .metric-label {color:#64748b;font-size:15px;}
 .stButton button, .stDownloadButton button {border-radius:12px;font-weight:700;}
-@media only screen and (max-width:768px){
-.rbm-title{font-size:30px}.rbm-divider{font-size:26px}.rbm-subtitle{font-size:15px}.rbm-client{font-size:13px}
-}
 </style>
 """, unsafe_allow_html=True)
 
@@ -85,7 +82,6 @@ def delete_row(key, row_id):
 
 def init_users():
     df = load_table("users")
-
     if df.empty:
         insert_row("users", {
             "username": "admin",
@@ -94,18 +90,15 @@ def init_users():
             "full_name": "RBM Admin"
         })
         df = load_table("users")
-
     return df
 
 
 def get_setting(name, default):
     df = load_table("settings")
-
-    if df.empty:
+    if df.empty or "setting" not in df.columns:
         return default
 
     row = df[df["setting"].astype(str) == name]
-
     if row.empty:
         return default
 
@@ -114,13 +107,17 @@ def get_setting(name, default):
 
 def update_setting(name, value):
     df = load_table("settings")
+
+    if df.empty or "setting" not in df.columns:
+        insert_row("settings", {"setting": name, "value": value})
+        return
+
     row = df[df["setting"].astype(str) == name]
 
     if row.empty:
         insert_row("settings", {"setting": name, "value": value})
     else:
-        row_id = int(row.iloc[0]["id"])
-        update_row("settings", row_id, {"value": value})
+        update_row("settings", int(row.iloc[0]["id"]), {"value": value})
 
 
 APP_NAME = get_setting("APP_NAME", "RBM AI Office Management App")
@@ -152,21 +149,17 @@ def filter_dataframe(df, keyword):
         return df
 
     keyword = keyword.lower()
-
     mask = df.astype(str).apply(
         lambda row: row.str.lower().str.contains(keyword, na=False).any(),
         axis=1
     )
-
     return df[mask]
 
 
 def to_excel_bytes(df):
     output = BytesIO()
-
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Report")
-
     return output.getvalue()
 
 
@@ -184,7 +177,6 @@ def next_employee_id(df):
         return "EMP001"
 
     nums = []
-
     for x in df["employee_id"].dropna().astype(str):
         if x.upper().startswith("EMP"):
             n = x.upper().replace("EMP", "")
@@ -241,18 +233,9 @@ def show_table_with_edit_delete(key, df, title):
 
             for col in df.columns:
                 if col == "id":
-                    st.text_input(
-                        col,
-                        value=str(selected_row[col]),
-                        disabled=True,
-                        key=f"edit_{key}_{col}"
-                    )
+                    st.text_input(col, value=str(selected_row[col]), disabled=True, key=f"edit_{key}_{col}")
                 else:
-                    edited_values[col] = st.text_input(
-                        col,
-                        value=str(selected_row[col]),
-                        key=f"edit_{key}_{col}"
-                    )
+                    edited_values[col] = st.text_input(col, value=str(selected_row[col]), key=f"edit_{key}_{col}")
 
             if st.button("Update Selected Record", use_container_width=True, key=f"update_{key}"):
                 update_row(key, int(selected_id), edited_values)
@@ -307,7 +290,6 @@ def dashboard():
     tasks = load_table("tasks")
 
     pending_tasks = 0
-
     if not tasks.empty:
         pending_tasks = len(tasks[tasks["status"].astype(str) != "Completed"])
 
@@ -326,7 +308,6 @@ def dashboard():
     st.subheader("Today Summary")
 
     today_text = str(date.today())
-
     today_att = att[att["attendance_date"].astype(str) == today_text] if not att.empty else att
     today_visitors = visitors[visitors["visit_date"].astype(str) == today_text] if not visitors.empty else visitors
 
@@ -341,7 +322,6 @@ def dashboard():
         st.dataframe(today_visitors, use_container_width=True)
 
     st.subheader("Pending Tasks")
-
     if not tasks.empty:
         st.dataframe(tasks[tasks["status"].astype(str) != "Completed"], use_container_width=True)
     else:
@@ -378,7 +358,6 @@ def employee_master():
                     "designation": designation,
                     "status": status,
                 })
-
                 st.success("Employee saved successfully")
                 st.rerun()
 
@@ -420,7 +399,6 @@ def attendance():
                     "remarks": remarks,
                     "created_by": st.session_state["username"],
                 })
-
                 st.success("Attendance saved successfully")
                 st.rerun()
 
@@ -455,7 +433,6 @@ def inout_register():
                     "remarks": remarks,
                     "created_by": st.session_state["username"],
                 })
-
                 st.success("IN / OUT entry saved")
                 st.rerun()
 
@@ -496,7 +473,6 @@ def visitor_register():
                     "remarks": remarks,
                     "created_by": st.session_state["username"],
                 })
-
                 st.success("Visitor saved successfully")
                 st.rerun()
 
@@ -509,7 +485,15 @@ def task_delegation():
     df = load_table("tasks")
     emp = load_table("employees")
 
-    emp_list = emp["employee_name"].dropna().tolist() if not emp.empty else []
+    emp_list = emp["employee_name"].dropna().astype(str).tolist() if not emp.empty else []
+
+    st.subheader("Assign Type")
+    assign_mode = st.radio(
+        "Choose assign method",
+        ["Select Employee", "Manual Entry"],
+        horizontal=True,
+        key="task_assign_mode_radio"
+    )
 
     with st.form("task_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
@@ -517,64 +501,49 @@ def task_delegation():
         task_date = c1.date_input("Task Date", value=date.today())
         task = c2.text_area("Task")
 
-        assign_type = st.radio(
-    "Assign Type",
-    ["Select Employee", "Manual Entry"],
-    horizontal=True,
-    key="task_assign_type"
-)
+        priority = c1.selectbox("Priority", ["Low", "Medium", "High", "Urgent"])
+        status = c1.selectbox("Status", ["Pending", "In Progress", "Completed"])
 
-if assign_type == "Select Employee":
-    assigned_to = st.selectbox(
-        "Assigned To",
-        employee_names,
-        key="task_assigned_to_select"
-    )
-else:
-    assigned_to = st.text_input(
-        "Assigned To - Manual Name",
-        placeholder="Yaha naam type karo",
-        key="task_assigned_to_manual"
-    )
+        if assign_mode == "Manual Entry":
+            assigned_to = c2.text_input(
+                "Assigned To",
+                value="",
+                placeholder="Yaha manual naam type karo"
+            )
         else:
             if emp_list:
-                assigned_to = c2.selectbox(
-                    "Assigned To",
-                    emp_list,
-                    key="task_employee_assigned_to"
-                )
+                assigned_to = c2.selectbox("Assigned To", emp_list)
             else:
                 assigned_to = c2.text_input(
                     "Assigned To",
                     value="",
-                    placeholder="No employee found, type name here",
-                    key="task_no_employee_assigned_to"
+                    placeholder="Employee master empty hai, yaha naam type karo"
                 )
 
-        due_date = c2.date_input("Due Date")
+        due_date = c2.date_input("Due Date", value=date.today())
         remarks = c2.text_input("Remarks")
 
-        if st.button("Save Task"):
-    if not task.strip():
-        st.error("Please enter task.")
-    elif not assigned_to.strip():
-        st.error("Please enter Assigned To name.")
-    else:
-        data = {
-            "task_date": str(task_date),
-            "task": task,
-            "assigned_to": assigned_to,
-            "priority": priority,
-            "due_date": str(due_date),
-            "status": status,
-            "remarks": remarks
-        }
-
-        supabase.table("tasks").insert(data).execute()
-        st.success("Task saved successfully.")
+        if st.form_submit_button("Save Task", use_container_width=True):
+            if task.strip() == "":
+                st.error("Task is required")
+            elif str(assigned_to).strip() == "":
+                st.error("Assigned To is required")
+            else:
+                insert_row("tasks", {
+                    "task_date": str(task_date),
+                    "task": task,
+                    "assigned_to": str(assigned_to),
+                    "priority": priority,
+                    "due_date": str(due_date),
+                    "status": status,
+                    "remarks": remarks,
+                    "created_by": st.session_state["username"],
+                })
+                st.success("Task saved successfully")
                 st.rerun()
 
     show_table_with_edit_delete("tasks", df, "Task Records")
+
 
 def export_reports():
     st.header("Excel / CSV Export Reports")
@@ -642,7 +611,6 @@ def user_management():
                     "role": role,
                     "full_name": full_name,
                 })
-
                 st.success("User created successfully")
                 st.rerun()
 
@@ -669,7 +637,7 @@ def app_settings():
             st.success("Settings saved successfully.")
             st.rerun()
 
-    st.info("Now data is saved in Supabase Cloud Database, not OneDrive CSV.")
+    st.info("Data is saved in Supabase Cloud Database.")
 
 
 def main_app():
@@ -724,7 +692,7 @@ def main_app():
     elif choice == "User Management":
         user_management()
     elif choice == "App Settings":
-        app_settings()  
+        app_settings()
 
 
 if "logged_in" not in st.session_state:
