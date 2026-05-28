@@ -517,23 +517,25 @@ def task_delegation():
         task_date = c1.date_input("Task Date", value=date.today())
         task = c2.text_area("Task")
 
-        assign_mode = c1.radio(
-            "Assign Type",
-            ["Select Employee", "Manual Entry"],
-            horizontal=True,
-            key="task_assign_mode_radio"
-        )
+        assign_type = st.radio(
+    "Assign Type",
+    ["Select Employee", "Manual Entry"],
+    horizontal=True,
+    key="task_assign_type"
+)
 
-        priority = c1.selectbox("Priority", ["Low", "Medium", "High", "Urgent"])
-        status = c1.selectbox("Status", ["Pending", "In Progress", "Completed"])
-
-        if assign_mode == "Manual Entry":
-            assigned_to = c2.text_input(
-                "Assigned To",
-                value="",
-                placeholder="Type manual name here",
-                key="task_manual_assigned_to"
-            )
+if assign_type == "Select Employee":
+    assigned_to = st.selectbox(
+        "Assigned To",
+        employee_names,
+        key="task_assigned_to_select"
+    )
+else:
+    assigned_to = st.text_input(
+        "Assigned To - Manual Name",
+        placeholder="Yaha naam type karo",
+        key="task_assigned_to_manual"
+    )
         else:
             if emp_list:
                 assigned_to = c2.selectbox(
@@ -552,24 +554,24 @@ def task_delegation():
         due_date = c2.date_input("Due Date")
         remarks = c2.text_input("Remarks")
 
-        if st.form_submit_button("Save Task", use_container_width=True):
-            if task.strip() == "":
-                st.error("Task is required")
-            elif str(assigned_to).strip() == "":
-                st.error("Assigned To is required")
-            else:
-                insert_row("tasks", {
-                    "task_date": str(task_date),
-                    "task": task,
-                    "assigned_to": str(assigned_to),
-                    "priority": priority,
-                    "due_date": str(due_date),
-                    "status": status,
-                    "remarks": remarks,
-                    "created_by": st.session_state["username"],
-                })
+        if st.button("Save Task"):
+    if not task.strip():
+        st.error("Please enter task.")
+    elif not assigned_to.strip():
+        st.error("Please enter Assigned To name.")
+    else:
+        data = {
+            "task_date": str(task_date),
+            "task": task,
+            "assigned_to": assigned_to,
+            "priority": priority,
+            "due_date": str(due_date),
+            "status": status,
+            "remarks": remarks
+        }
 
-                st.success("Task saved successfully")
+        supabase.table("tasks").insert(data).execute()
+        st.success("Task saved successfully.")
                 st.rerun()
 
     show_table_with_edit_delete("tasks", df, "Task Records")
